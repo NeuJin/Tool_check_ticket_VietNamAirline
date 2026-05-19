@@ -24,6 +24,12 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
 try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_OK = True
+except ImportError:
+    PLAYWRIGHT_OK = False
+
+try:
     import requests
 except ImportError:
     print("Thiếu thư viện 'requests'. Chạy: pip install requests")
@@ -1641,12 +1647,20 @@ class App:
         ttk.Label(api_f, text="x-d-token:").grid(
             row=1, column=0, sticky=tk.W, pady=4, padx=(20, 8))
         self._xd_token = tk.StringVar(value=self.settings.get("vna_xd_token", ""))
-        ttk.Entry(api_f, textvariable=self._xd_token, width=55).grid(
-            row=1, column=1, sticky=tk.EW)
+        xd_frame = ttk.Frame(api_f)
+        xd_frame.grid(row=1, column=1, sticky=tk.EW)
+        ttk.Entry(xd_frame, textvariable=self._xd_token, width=45).pack(side=tk.LEFT)
+        self._auto_token_btn = ttk.Button(
+            xd_frame, text="🔄 Tự động lấy",
+            command=self._auto_fetch_xd_token)
+        self._auto_token_btn.pack(side=tk.LEFT, padx=(6, 0))
+        self._auto_token_status = tk.StringVar(value="")
+        ttk.Label(xd_frame, textvariable=self._auto_token_status,
+                  foreground="#1565c0").pack(side=tk.LEFT, padx=(6, 0))
         ttk.Label(api_f,
-                  text=("→  Lấy token: vào booking.vietnamairlines.com → search chuyến bay → F12 → Network\n"
-                        "   → filter 'air-bounds' → Request Headers → copy giá trị 'x-d-token' → paste vào đây\n"
-                        "   Token hợp lệ ~30 phút, sau đó lấy lại từ browser"),
+                  text=("→  Nhấn '🔄 Tự động lấy' để app tự lấy token qua trình duyệt ẩn\n"
+                        "   hoặc lấy thủ công: F12 → Network → filter 'air-bounds' → Request Headers → x-d-token\n"
+                        "   Token hợp lệ ~30 phút"),
                   foreground="#555", justify=tk.LEFT).grid(
             row=2, column=0, columnspan=2, sticky=tk.W, padx=(20, 0), pady=(0, 6))
 
@@ -2165,6 +2179,72 @@ class App:
             self._mon_status.set("Đã dừng")
 
     # ── API settings ──────────────────────────────────────────────────────────
+
+    def _auto_fetch_xd_token(self):
+        if not PLAYWRIGHT_OK:
+            messagebox.showerror("Lỗi", "Playwright chưa cài.\nChạy: pip install playwright && playwright install chromium")
+            return
+
+        self._auto_token_btn.config(state=tk.DISABLED)
+        self._auto_token_status.set("⏳ Đang lấy token...")
+
+        def worker():
+            token = None
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    context = browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0"
+                        )
+                    )
+                    page = context.new_page()
+
+                    captured = []
+
+                    def on_request(request):
+                        if "air-bounds" in request.url:
+                            xdt = request.headers.get("x-d-token", "")
+                            if xdt:
+                                captured.append(xdt)
+
+                    page.on("request", on_request)
+                    page.goto("https://booking.vietnamairlines.com/", timeout=30000)
+                    page.wait_for_timeout(3000)
+
+                    # Thử trigger search với route HAN→SGN để có request air-bounds
+                    try:
+                        page.evaluate("""
+                            fetch('https://api-des.vietnamairlines.com/v2/search/air-bounds', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'}
+                            }).catch(()=>{});
+                        """)
+                        page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
+
+                    if captured:
+                        token = captured[-1]
+                    browser.close()
+            except Exception as e:
+                self.after(0, lambda: self._auto_token_status.set(f"❌ Lỗi: {e}"))
+                self.after(0, lambda: self._auto_token_btn.config(state=tk.NORMAL))
+                return
+
+            if token:
+                self._xd_token.set(token)
+                VNADirectAPI.x_d_token = token
+                self.after(0, lambda: self._auto_token_status.set("✅ Lấy token thành công!"))
+            else:
+                # Fallback: lấy token từ TOKEN_URL trực tiếp (không cần x-d-token)
+                self.after(0, lambda: self._auto_token_status.set("⚠ Không lấy được x-d-token (dùng không có token cũng được)"))
+
+            self.after(0, lambda: self._auto_token_btn.config(state=tk.NORMAL))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _save_api(self):
         self.settings["api_type"]              = self._api_type.get()

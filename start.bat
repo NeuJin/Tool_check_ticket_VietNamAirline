@@ -1,15 +1,15 @@
 @echo off
-REM Khởi động VNA Flight Check (mở trong browser)
+REM Khởi động VNA Flight Check (desktop window + Python backend)
 REM Double-click file này để chạy
 
 cd /d "%~dp0"
 
-REM Thử dùng pywebview nếu đã cài, nếu không thì mở browser
-python -c "import webview" 2>nul
-if %errorlevel% == 0 (
-    python run_local.py --window
-) else (
-    python run_local.py
+REM Đảm bảo pywebview & requests đã được cài
+python -c "import webview, requests" 2>nul
+if %errorlevel% neq 0 (
+    echo Cai pywebview va requests truoc...
+    python -m pip install pywebview requests
 )
 
+python run_local.py --window
 pause

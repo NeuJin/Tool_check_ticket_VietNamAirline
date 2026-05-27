@@ -69,6 +69,9 @@ function App() {
         time: '1 giờ trước' },
     ],
 
+    // data source: 'live' (Python bridge), 'mock' (no bridge), or null (loading)
+    dataSource: null,
+
     // settings
     apiType: 'vna_direct',
     xdToken: '',
@@ -149,8 +152,48 @@ function App() {
     root.style.fontSize = (15 * (tweaks.fontScale || 1)) + 'px';
   }, [tweaks.accent, tweaks.fontScale]);
 
-  // ── Search execution (simulated) ────────────────────────────────────────
+  // ── Search execution ────────────────────────────────────────────────────
+  // Uses the Python bridge (window.pywebview.api) when available — that gives
+  // real VNA prices. Falls back to mockRangeResults in plain browser mode.
   const searchRef = React.useRef(0);
+
+  async function _searchBridge(origin, dest, dateFrom, dateTo, directOnly, myId) {
+    const total = daysBetween(dateFrom, dateTo) + 1;
+    // Poll progress while the bridge call is in flight
+    const pollId = setInterval(async () => {
+      try {
+        const p = await window.pywebview.api.get_progress();
+        if (searchRef.current !== myId) return;
+        setState(s => ({
+          ...s,
+          progressDone:  p.done,
+          progressTotal: p.total || total,
+          progress:      p.total ? (p.done / p.total) * 100 : 0,
+        }));
+      } catch (_) { /* ignore */ }
+    }, 300);
+
+    try {
+      const resp = await window.pywebview.api.search_range(origin, dest, dateFrom, dateTo, directOnly);
+      if (resp.error) {
+        console.error('search_range error:', resp.error);
+        return {};
+      }
+      return resp.results || {};
+    } finally {
+      clearInterval(pollId);
+    }
+  }
+
+  async function _searchMock(origin, dest, dateFrom, dateTo, directOnly, myId, fakeTotal) {
+    for (let i = 1; i <= fakeTotal; i++) {
+      await new Promise(r => setTimeout(r, 15 + Math.random() * 25));
+      if (searchRef.current !== myId) return null;
+      setState(s => ({ ...s, progressDone: i, progress: (i / fakeTotal) * 100 }));
+    }
+    return mockRangeResults(origin, dest, dateFrom, dateTo, directOnly);
+  }
+
   async function doSearch() {
     const myId = searchRef.current + 1;
     searchRef.current = myId;
@@ -161,13 +204,25 @@ function App() {
     const total = Math.max(1, depDays + retDays);
     setState({ progressTotal: total });
 
-    const out = mockRangeResults(state.origin, state.dest, state.depFrom, state.depTo, state.directOnly);
-    const ret = state.tripType === 'RT' ? mockRangeResults(state.dest, state.origin, state.retFrom, state.retTo, state.directOnly) : null;
+    const useBridge = hasBridge();
+    let out, ret;
 
-    for (let i = 1; i <= total; i++) {
-      await new Promise(r => setTimeout(r, 15 + Math.random() * 25));
+    if (useBridge) {
+      out = await _searchBridge(state.origin, state.dest, state.depFrom, state.depTo, state.directOnly, myId);
       if (searchRef.current !== myId) return;
-      setState(s => ({ ...s, progressDone: i, progress: (i / total) * 100 }));
+      if (state.tripType === 'RT') {
+        ret = await _searchBridge(state.dest, state.origin, state.retFrom, state.retTo, state.directOnly, myId);
+        if (searchRef.current !== myId) return;
+      } else {
+        ret = null;
+      }
+    } else {
+      out = await _searchMock(state.origin, state.dest, state.depFrom, state.depTo, state.directOnly, myId, depDays);
+      if (searchRef.current !== myId) return;
+      ret = state.tripType === 'RT'
+        ? await _searchMock(state.dest, state.origin, state.retFrom, state.retTo, state.directOnly, myId, retDays)
+        : null;
+      if (searchRef.current !== myId) return;
     }
 
     setState({
@@ -177,9 +232,39 @@ function App() {
       progress: 100,
       lastSearch: new Date().toISOString(),
       activeTab: 'results',
+      dataSource: useBridge ? 'live' : 'mock',
     });
     setActiveTab('results');
   }
+
+  // Bootstrap: load settings + exchange rate from bridge when running under pywebview
+  React.useEffect(() => {
+    (async () => {
+      const ok = await waitForBridge(3000);
+      if (!ok) {
+        setState({ dataSource: 'mock' });
+        return;
+      }
+      try {
+        const [settings, rate] = await Promise.all([
+          window.pywebview.api.get_settings(),
+          window.pywebview.api.exchange_rate(),
+        ]);
+        setState(s => ({
+          ...s,
+          xdToken:        settings.vna_xd_token        || '',
+          amadeusId:      settings.amadeus_client_id    || '',
+          amadeusSecret:  settings.amadeus_client_secret|| '',
+          kiwiKey:        settings.kiwi_api_key         || '',
+          apiType:        settings.api_type             || 'vna_direct',
+          exchangeRate:   rate.vndPerJpy || s.exchangeRate,
+          dataSource:     'live',
+        }));
+      } catch (e) {
+        console.error('bootstrap bridge error:', e);
+      }
+    })();
+  }, []);
 
   function saveConfig() {
     const name = prompt('Đặt tên cho cấu hình:', `${state.origin}→${state.dest} · ${fmtDateShort(state.depFrom)}`);
@@ -236,9 +321,15 @@ function App() {
               </button>
             ))}
           </nav>
-          <div className="statuspill" title="Trạng thái app">
-            <span className={`statuspill__dot ${state.searching ? 'statuspill__dot--warn' : state.monitorOn ? '' : ''}`} />
-            <span>{state.searching ? 'Đang quét...' : state.monitorOn ? 'Theo dõi bật' : 'Sẵn sàng'}</span>
+          <div className="statuspill" title={state.dataSource === 'live' ? 'Đang dùng API VNA thật' : state.dataSource === 'mock' ? 'Đang dùng mock data — chạy: python run_local.py --window' : 'Đang kết nối...'}>
+            <span className={`statuspill__dot ${state.searching ? 'statuspill__dot--warn' : ''}`}
+                  style={state.dataSource === 'mock' ? { background: '#f59e0b' } : state.dataSource === 'live' ? { background: '#10b981' } : {}} />
+            <span>
+              {state.searching ? 'Đang quét...'
+                : state.dataSource === 'live'  ? (state.monitorOn ? 'Live · theo dõi' : 'Live · sẵn sàng')
+                : state.dataSource === 'mock'  ? 'Mock data'
+                : 'Kết nối...'}
+            </span>
           </div>
         </div>
       </header>

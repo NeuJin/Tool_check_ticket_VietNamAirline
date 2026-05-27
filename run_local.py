@@ -1,21 +1,22 @@
 """
-run_local.py — Chạy VNA Flight Check như một desktop app local.
+run_local.py — Chạy VNA Flight Check như desktop app.
 
-Cách 1 (đơn giản nhất, không cần thêm gì):
-    python run_local.py
-→ Mở design/index.html qua HTTP server cục bộ rồi mở browser mặc định.
-
-Cách 2 (desktop window thực sự, không có thanh URL):
-    pip install pywebview
+Cách 1 (KHUYẾN NGHỊ — desktop window + API VNA thật):
+    pip install pywebview requests
     python run_local.py --window
-→ Mở trong cửa sổ desktop riêng (1280x820, resizable).
+→ Mở trong pywebview với Python Bridge → JS gọi window.pywebview.api.* để lấy
+  dữ liệu giá vé thật từ Vietnam Airlines.
 
-Cách 3 (dùng bundle standalone cũ — fallback nếu cần):
+Cách 2 (mở browser, chỉ UI mock — KHÔNG có API thật vì không có bridge):
+    python run_local.py
+→ HTTP server serve design/ qua http://127.0.0.1:8765/. JS không gọi được
+  Python backend ở chế độ này (window.pywebview không tồn tại) — UI sẽ rơi
+  về mock data.
+
+Cách 3 (bundle standalone cũ):
     python run_local.py --standalone
-→ Mở file standalone HTML (không nhận được edit JSX mới nhất).
 
-LƯU Ý: Đây mới chỉ là UI thuần (mock data). Để có data thật từ VNA, làm theo
-hướng dẫn trong integration/INTEGRATION_GUIDE.md (Option A khuyến nghị).
+LƯU Ý: Lần đầu mở Settings cần paste x-d-token từ DevTools (booking.vietnamairlines.com).
 """
 import argparse
 import http.server
@@ -44,7 +45,6 @@ def _find_free_port(preferred: int = 8765) -> int:
 
 
 def _start_design_server() -> str:
-    """Start a local HTTP server serving design/ and return the index URL."""
     if not (DESIGN_DIR / "index.html").exists():
         print(f"❌ Không tìm thấy {DESIGN_DIR / 'index.html'}", file=sys.stderr)
         sys.exit(1)
@@ -56,19 +56,17 @@ def _start_design_server() -> str:
             super().__init__(*args, directory=str(DESIGN_DIR), **kw)
 
         def end_headers(self):
-            # Disable cache so JSX edits show up on refresh
             self.send_header("Cache-Control", "no-store, must-revalidate")
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
             super().end_headers()
 
         def log_message(self, fmt, *args):
-            pass  # silence
+            pass
 
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", port), Handler)
     httpd.daemon_threads = True
-    t = threading.Thread(target=httpd.serve_forever, daemon=True)
-    t.start()
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return f"http://127.0.0.1:{port}/index.html"
 
 
@@ -80,13 +78,14 @@ def open_in_browser(use_standalone: bool = False):
         url = STANDALONE.as_uri()
     else:
         url = _start_design_server()
+        print("⚠  Chế độ browser KHÔNG có cầu nối Python — UI sẽ chạy với mock data.")
+        print("   Để xem giá vé thật, dùng:  python run_local.py --window")
 
     print(f"✈  Mở VNA Flight Check trong browser...")
     print(f"   {url}")
     webbrowser.open(url)
 
     if not use_standalone:
-        print("   (HTTP server đang chạy — đóng cửa sổ này để dừng)")
         try:
             threading.Event().wait()
         except KeyboardInterrupt:
@@ -100,19 +99,27 @@ def open_in_window(use_standalone: bool = False):
         print("❌ Chưa cài pywebview. Chạy: pip install pywebview", file=sys.stderr)
         sys.exit(1)
 
+    # Build the JS-callable bridge that exposes Python backend to React UI
+    from backend.bridge import Bridge
+    bridge = Bridge()
+
     if use_standalone:
         if not STANDALONE.exists():
             print(f"❌ Không tìm thấy {STANDALONE}", file=sys.stderr)
             sys.exit(1)
         url = str(STANDALONE)
     else:
+        # Still start the HTTP server (Babel needs to fetch JSX files; file:// is blocked)
         url = _start_design_server()
+        print(f"   Serving design/ via {url}")
 
+    print("✈  Mở VNA Flight Check (pywebview + Python backend)")
     webview.create_window(
         "VNA Flight Check",
         url,
-        width=1280,
-        height=820,
+        js_api=bridge,
+        width=1320,
+        height=860,
         min_size=(900, 620),
         resizable=True,
     )
@@ -122,9 +129,9 @@ def open_in_window(use_standalone: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Chạy VNA Flight Check local")
     parser.add_argument("--window", action="store_true",
-                        help="Mở trong cửa sổ desktop (cần pywebview)")
+                        help="Mở trong cửa sổ desktop pywebview + Python backend (khuyến nghị)")
     parser.add_argument("--standalone", action="store_true",
-                        help="Dùng bundle standalone cũ thay vì design/ live")
+                        help="Dùng bundle standalone cũ")
     args = parser.parse_args()
 
     if args.window:

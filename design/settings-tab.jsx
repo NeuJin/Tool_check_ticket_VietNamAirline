@@ -16,15 +16,37 @@ function SettingsTab({ state, setState }) {
 
   function setField(k, v) { setState(s => ({ ...s, [k]: v })); }
 
-  function commitXdToken()     {
+  async function _persist(partial) {
+    if (hasBridge()) {
+      try { await window.pywebview.api.save_settings(partial); } catch (e) { console.error('save_settings:', e); }
+    }
+  }
+
+  function commitXdToken() {
     if (localXdToken !== state.xdToken) {
       setField('xdToken', localXdToken);
       setTokenSetAt(Date.now());
+      _persist({ vna_xd_token: localXdToken });
     }
   }
-  function commitAmadeusId()   { if (localAmadeusId  !== state.amadeusId)     setField('amadeusId',     localAmadeusId); }
-  function commitAmadeusSec()  { if (localAmadeusSec !== state.amadeusSecret) setField('amadeusSecret', localAmadeusSec); }
-  function commitKiwiKey()     { if (localKiwiKey    !== state.kiwiKey)       setField('kiwiKey',       localKiwiKey); }
+  function commitAmadeusId() {
+    if (localAmadeusId !== state.amadeusId) {
+      setField('amadeusId', localAmadeusId);
+      _persist({ amadeus_client_id: localAmadeusId });
+    }
+  }
+  function commitAmadeusSec() {
+    if (localAmadeusSec !== state.amadeusSecret) {
+      setField('amadeusSecret', localAmadeusSec);
+      _persist({ amadeus_client_secret: localAmadeusSec });
+    }
+  }
+  function commitKiwiKey() {
+    if (localKiwiKey !== state.kiwiKey) {
+      setField('kiwiKey', localKiwiKey);
+      _persist({ kiwi_api_key: localKiwiKey });
+    }
+  }
 
   // Token freshness — counts down from when token was last set/refreshed
   const [tokenSetAt, setTokenSetAt] = React.useState(() => Date.now());
@@ -54,12 +76,35 @@ function SettingsTab({ state, setState }) {
   async function refreshToken() {
     if (refreshing) return;
     setRefreshing(true);
-    // UI-only refresh: in real integration this would call the headless
-    // browser bridge or backend to re-fetch the x-d-token. Here we just
-    // reset the "set time" so the countdown restarts.
     try {
-      await new Promise(r => setTimeout(r, 700));
-      setTokenSetAt(Date.now());
+      if (hasBridge()) {
+        // Backend resets OAuth + returns current token_status. User still has
+        // to paste a fresh x-d-token from booking.vietnamairlines.com DevTools.
+        const status = await window.pywebview.api.refresh_xd_token();
+        if (status && status.hasToken && !status.expired) {
+          // Realign UI clock with backend
+          setTokenSetAt(Date.now() - (status.ageSec || 0) * 1000);
+        }
+      } else {
+        await new Promise(r => setTimeout(r, 600));
+        setTokenSetAt(Date.now());
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function testConnection() {
+    if (!hasBridge()) {
+      alert('Cần chạy ở chế độ desktop (python run_local.py --window) để test kết nối.');
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const r = await window.pywebview.api.test_connection();
+      alert((r.ok ? '✅ ' : '❌ ') + r.message + (r.count ? ` (${r.count} chuyến)` : ''));
+    } catch (e) {
+      alert('Lỗi: ' + e);
     } finally {
       setRefreshing(false);
     }
@@ -71,9 +116,11 @@ function SettingsTab({ state, setState }) {
       if (txt) {
         const trimmed = txt.trim();
         setLocalXdToken(trimmed);
-        // Commit immediately since user explicitly invoked paste
         setField('xdToken', trimmed);
         setTokenSetAt(Date.now());
+        if (hasBridge()) {
+          try { await window.pywebview.api.set_xd_token(trimmed); } catch (e) {}
+        }
       }
     } catch (e) {
       alert('Không đọc được clipboard. Hãy paste thủ công vào ô và nhấn Lưu.');
@@ -144,10 +191,11 @@ function SettingsTab({ state, setState }) {
                   {showSecret ? I.eyeOff() : I.eye()}
                 </button>
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+              <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
                 <button className="btn" onClick={pasteFromClipboard}>📋 Dán từ clipboard</button>
-                <button className="btn" onClick={() => { setLocalXdToken(''); setField('xdToken', ''); }}>🗑 Xóa</button>
+                <button className="btn" onClick={() => { setLocalXdToken(''); setField('xdToken', ''); _persist({ vna_xd_token: '' }); }}>🗑 Xóa</button>
                 <button className="btn btn--primary" onClick={commitXdToken}>💾 Lưu</button>
+                <button className="btn" onClick={testConnection} disabled={refreshing}>{I.zap()} Kiểm tra</button>
               </div>
               <span className="field__hint">Token được lưu cục bộ, không gửi cho bên thứ ba · Dùng nút "Dán từ clipboard" để tránh lag khi paste chuỗi dài</span>
             </div>

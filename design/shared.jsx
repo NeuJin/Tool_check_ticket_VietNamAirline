@@ -247,6 +247,32 @@ function holidayTag(d) {
   return null;
 }
 
+// ── pywebview bridge helpers ─────────────────────────────────────────────────
+// When running under run_local.py --window, Python exposes a Bridge object
+// at window.pywebview.api. These helpers gracefully fall back to mocks when
+// no bridge is present (e.g. plain browser mode).
+
+function hasBridge() {
+  return !!(window.pywebview && window.pywebview.api);
+}
+
+// pywebview's api object is sometimes available before pywebviewready fires.
+// Awaitable helper so callers can wait for it at startup.
+function waitForBridge(timeoutMs = 4000) {
+  return new Promise(resolve => {
+    if (hasBridge()) return resolve(true);
+    let done = false;
+    const handler = () => { if (!done) { done = true; resolve(true); } };
+    window.addEventListener('pywebviewready', handler, { once: true });
+    // Polling fallback (pywebview sometimes injects api after the event)
+    const start = Date.now();
+    const iv = setInterval(() => {
+      if (hasBridge()) { done = true; clearInterval(iv); resolve(true); }
+      else if (Date.now() - start > timeoutMs) { clearInterval(iv); resolve(false); }
+    }, 100);
+  });
+}
+
 // Export to window
 Object.assign(window, {
   AIRPORTS, AIRPORT_BY_CODE,
@@ -254,5 +280,6 @@ Object.assign(window, {
   ymd, addDays, daysBetween,
   HolidayData, holidayTag,
   mockFlights, mockRangeResults, mockPrice,
+  hasBridge, waitForBridge,
   I,
 });

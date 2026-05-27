@@ -1639,10 +1639,32 @@ class App:
             row=0, column=0, columnspan=2, sticky=tk.W, pady=4)
 
         ttk.Label(api_f, text="x-d-token:").grid(
-            row=1, column=0, sticky=tk.W, pady=4, padx=(20, 8))
-        self._xd_token = tk.StringVar(value=self.settings.get("vna_xd_token", ""))
-        ttk.Entry(api_f, textvariable=self._xd_token, width=55).grid(
-            row=1, column=1, sticky=tk.EW)
+            row=1, column=0, sticky=tk.NW, pady=4, padx=(20, 8))
+        # Use Text widget instead of Entry – Entry freezes with the very long token string
+        xd_frame = ttk.Frame(api_f)
+        xd_frame.grid(row=1, column=1, sticky=tk.EW, pady=2)
+        self._xd_token_text = tk.Text(xd_frame, height=3, width=55, wrap=tk.WORD,
+                                      font=("Consolas", 8))
+        self._xd_token_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        _saved_xd = self.settings.get("vna_xd_token", "")
+        if _saved_xd:
+            self._xd_token_text.insert("1.0", _saved_xd)
+        _xd_btn_frame = ttk.Frame(xd_frame)
+        _xd_btn_frame.pack(side=tk.LEFT, padx=(4, 0))
+        def _paste_xd_token():
+            try:
+                clip = self._xd_token_text.clipboard_get()
+            except tk.TclError:
+                clip = ""
+            if clip:
+                self._xd_token_text.delete("1.0", tk.END)
+                self._xd_token_text.insert("1.0", clip.strip())
+        def _clear_xd_token():
+            self._xd_token_text.delete("1.0", tk.END)
+        ttk.Button(_xd_btn_frame, text="📋 Paste", command=_paste_xd_token,
+                   width=8).pack(pady=(0, 4))
+        ttk.Button(_xd_btn_frame, text="🗑 Xóa", command=_clear_xd_token,
+                   width=8).pack()
         ttk.Label(api_f,
                   text=("→  Lấy token: vào booking.vietnamairlines.com → search chuyến bay → F12 → Network\n"
                         "   → filter 'air-bounds' → Request Headers → copy giá trị 'x-d-token' → paste vào đây\n"
@@ -2168,7 +2190,7 @@ class App:
 
     def _save_api(self):
         self.settings["api_type"]              = self._api_type.get()
-        self.settings["vna_xd_token"]          = self._xd_token.get().strip()
+        self.settings["vna_xd_token"]          = self._xd_token_text.get("1.0", tk.END).strip()
         self.settings["amadeus_client_id"]     = self._am_id.get().strip()
         self.settings["amadeus_client_secret"] = self._am_sec.get().strip()
         self.settings["kiwi_api_key"]          = self._kiwi_key.get().strip()

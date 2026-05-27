@@ -230,6 +230,10 @@ class VNADirectAPI(FlightAPI):
                 pass
             return None
 
+    # If True, the next successful search will dump the raw JSON response to
+    # ~/.vna_tracker/last_response_<date>.json for debugging mismatched prices.
+    DEBUG_DUMP_NEXT = False
+
     def search(self, origin: str, destination: str, date: str,
                direct_only: bool = False) -> List[FlightResult]:
         token = self._get_oauth_token()
@@ -254,7 +258,14 @@ class VNADirectAPI(FlightAPI):
             r = requests.post(self.SEARCH_URL, json=body, headers=headers, timeout=20)
             if not r.ok:
                 return []
-            return self._parse(r.json(), date, direct_only)
+            data = r.json()
+            if VNADirectAPI.DEBUG_DUMP_NEXT:
+                VNADirectAPI.DEBUG_DUMP_NEXT = False
+                from pathlib import Path as _P
+                dump = _P.home() / ".vna_tracker" / f"last_response_{origin}-{destination}-{date}.json"
+                dump.parent.mkdir(parents=True, exist_ok=True)
+                dump.write_text(json.dumps(data, indent=2, ensure_ascii=False), "utf-8")
+            return self._parse(data, date, direct_only)
         except Exception:
             return []
 
@@ -275,11 +286,14 @@ class VNADirectAPI(FlightAPI):
             cheapest = None
             for ab in group.get("airBounds", []):
                 prices = ab.get("prices", {}).get("totalPrices", [])
-                if not prices:
+                # Some responses ship multiple price points (per pax-type, per
+                # currency, …). Take the minimum positive total to be safe.
+                totals = [p.get("total", 0) for p in prices
+                          if isinstance(p.get("total", 0), (int, float))
+                             and p.get("total", 0) > 0]
+                if not totals:
                     continue
-                total_jpy = prices[0].get("total", 0)
-                if total_jpy <= 0:
-                    continue
+                total_jpy = min(totals)
                 if cheapest is None or total_jpy < cheapest[0]:
                     cheapest = (total_jpy, ab, segments)
 

@@ -120,3 +120,10 @@ class Bridge:
 
     def ping(self) -> str:
         return "pong"
+
+    def dump_next_response(self) -> dict:
+        """Arm a one-shot dump of the next raw API response to
+        ~/.vna_tracker/last_response_<route>-<date>.json — for debugging
+        price mismatches against the web."""
+        VNADirectAPI.DEBUG_DUMP_NEXT = True
+        return {"armed": True, "path": "~/.vna_tracker/last_response_*.json"}

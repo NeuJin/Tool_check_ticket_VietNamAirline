@@ -16,10 +16,54 @@ function SettingsTab({ state, setState }) {
 
   function setField(k, v) { setState(s => ({ ...s, [k]: v })); }
 
-  function commitXdToken()     { if (localXdToken    !== state.xdToken)       setField('xdToken',       localXdToken); }
+  function commitXdToken()     {
+    if (localXdToken !== state.xdToken) {
+      setField('xdToken', localXdToken);
+      setTokenSetAt(Date.now());
+    }
+  }
   function commitAmadeusId()   { if (localAmadeusId  !== state.amadeusId)     setField('amadeusId',     localAmadeusId); }
   function commitAmadeusSec()  { if (localAmadeusSec !== state.amadeusSecret) setField('amadeusSecret', localAmadeusSec); }
   function commitKiwiKey()     { if (localKiwiKey    !== state.kiwiKey)       setField('kiwiKey',       localKiwiKey); }
+
+  // Token freshness — counts down from when token was last set/refreshed
+  const [tokenSetAt, setTokenSetAt] = React.useState(() => Date.now());
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [tick, setTick]             = React.useState(0);
+  // re-render every 30s to update the "còn X phút" label
+  React.useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Token lifetime ~30 min (1799s from VNA OAuth init endpoint)
+  const TOKEN_TTL_MS = 30 * 60 * 1000;
+  const hasToken     = !!(state.xdToken || localXdToken);
+  const ageMs        = Date.now() - tokenSetAt;
+  const remainingMin = Math.max(0, Math.ceil((TOKEN_TTL_MS - ageMs) / 60000));
+  const expired      = hasToken && remainingMin === 0;
+  const statusColor  = !hasToken ? 'var(--text-2)'
+                       : expired ? 'var(--bad, #dc2626)'
+                       : remainingMin < 5 ? '#f59e0b'
+                       : 'var(--good)';
+  const statusLabel  = !hasToken ? 'Chưa có token'
+                       : expired ? 'Token đã hết hạn'
+                       : refreshing ? 'Đang làm mới...'
+                       : `Token còn hiệu lực`;
+
+  async function refreshToken() {
+    if (refreshing) return;
+    setRefreshing(true);
+    // UI-only refresh: in real integration this would call the headless
+    // browser bridge or backend to re-fetch the x-d-token. Here we just
+    // reset the "set time" so the countdown restarts.
+    try {
+      await new Promise(r => setTimeout(r, 700));
+      setTokenSetAt(Date.now());
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function pasteFromClipboard() {
     try {
@@ -29,6 +73,7 @@ function SettingsTab({ state, setState }) {
         setLocalXdToken(trimmed);
         // Commit immediately since user explicitly invoked paste
         setField('xdToken', trimmed);
+        setTokenSetAt(Date.now());
       }
     } catch (e) {
       alert('Không đọc được clipboard. Hãy paste thủ công vào ô và nhấn Lưu.');
@@ -107,9 +152,16 @@ function SettingsTab({ state, setState }) {
               <span className="field__hint">Token được lưu cục bộ, không gửi cho bên thứ ba · Dùng nút "Dán từ clipboard" để tránh lag khi paste chuỗi dài</span>
             </div>
             <div className="statusrow">
-              <span style={{ color: 'var(--good)' }}>●</span>
-              <span style={{ flex: 1 }}>Token còn hiệu lực <b className="mono">~24 phút</b></span>
-              <button className="btn">{I.refresh()} Làm mới</button>
+              <span style={{ color: statusColor }}>●</span>
+              <span style={{ flex: 1 }}>
+                {statusLabel}
+                {hasToken && !expired && !refreshing && (
+                  <> <b className="mono">~{remainingMin} phút</b></>
+                )}
+              </span>
+              <button className="btn" onClick={refreshToken} disabled={refreshing}>
+                {I.refresh()} {refreshing ? 'Đang làm mới…' : 'Làm mới'}
+              </button>
             </div>
             <div className="statusrow">
               <span style={{ color: 'var(--sky-700)' }}>{I.info()}</span>

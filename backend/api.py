@@ -330,4 +330,8 @@ class VNADirectAPI(FlightAPI):
                 flight_number  = flight_num,
             ))
 
+        # Sort cheapest first — VNA API does not guarantee airBoundGroups
+        # are ordered by price, and the UI takes flightsOut[0] as the
+        # representative flight for each day.
+        results.sort(key=lambda f: f.price_jpy)
         return results

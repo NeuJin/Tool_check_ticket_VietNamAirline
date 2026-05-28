@@ -24,6 +24,10 @@ class Bridge:
         # progress state for search
         self._progress_lock = threading.Lock()
         self._progress = {"done": 0, "total": 0, "running": False}
+        # Auto-arm response dump on startup — first successful search will
+        # write the raw VNA JSON to ~/.vna_tracker/last_response_*.json for
+        # debugging price mismatches. Re-armed after each app start.
+        VNADirectAPI.DEBUG_DUMP_NEXT = True
 
     # ── Settings ──────────────────────────────────────────────────────────────
 

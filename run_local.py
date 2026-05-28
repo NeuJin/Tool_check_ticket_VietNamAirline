@@ -123,7 +123,7 @@ def open_in_window(use_standalone: bool = False):
         min_size=(900, 620),
         resizable=True,
     )
-    webview.start(debug=False)
+    webview.start(debug=True)
 
 
 if __name__ == "__main__":
